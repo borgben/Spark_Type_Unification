@@ -19,6 +19,52 @@ class MyCustomException(s: String) extends Exception(s) {}
        }
      }
 
+     def unify_struct_fields(struct_field_a:Seq[StructField], struct_field_b:Seq[StructField])
+     {
+       // Create Empty Sequence.
+       var unified_sequence = Seq()
+
+       // Convert "struct_field_a" and "struct_field_b" to a map.
+       val map_a = struct_field_a.map((x:StructField) => x match{ case(StructField(name,_, _)) => (name,x)}).toMap 
+       val map_b = struct_field_b.map((x:StructField) => x match{ case(StructField(name,_, _)) => (name,x)}).toMap 
+
+       // Retrieve the difference between the two maps.
+       val map_diff = (map_a.keySet -- map_b.keySet) ++ (map_a.keySet -- map_b.keySet)
+
+       // Iterate the elements of "struct_field_b" looking for elements with matching names within "map_a". 
+       // If there exist matching elements check whether their datatypes match if not they must be unified.
+       // By the end of the for loop "unified_sequence" will contain all the matching elements between "struct_field_a" and "struct_field_b"
+       for (x <- struct_field_b)
+       {
+          struct_field_b match 
+          {
+              case (StructField(name_b,data_type_b, contains_null_b)) => 
+              {
+                if (map_a contains name_b)
+                {
+                    map_a.get(name_b) match 
+                    {
+                        case (StructField(_,data_type_a,contains_null_a)) => 
+                        {
+                          if (data_type_a == data_type_b)
+                          {
+                            unified_sequence = unified_sequence.add(StructField(name_b,data_type_a,contains_null_a && contains_null_b))
+                          }
+                          else
+                          {
+                            unified_sequence = unified_sequence.add(StructField(name_b , unify_spark_types((data_type_a,data_type_b)),contains_null_a && contains_null_b))
+                          }
+                        }
+                    }
+                }
+              }
+          }
+       }
+       
+       // TODO: We need to convert map_diff to a sequence and replace "struct_field_a" with the new "struct_field_diff".
+       return struct_field_a.union(unified_sequence).distinct
+     }
+
      def unify_spark_types (type_pair:(DataType,DataType)):DataType = 
      {
        type_pair match 
@@ -160,7 +206,6 @@ class MyCustomException(s: String) extends Exception(s) {}
                     )
                 }
              }   
-            
          }
          case _ => ("","")
        }
@@ -211,24 +256,24 @@ class MyCustomException(s: String) extends Exception(s) {}
      }
 
   val structureData = Seq(
-    Row(Seq(Row("James ","Smith")),"36636","M",3100),
-    Row(Seq(Row("Michael ","Rose","")),"40288","M",4300),
-    Row(Seq(Row("Robert ","Williams")),"42114","M",1400)
+    Row(Seq(Row("James ","Vella","Smith")),"36636","M",3100),
+    Row(Seq(Row("Michael ","J","Rose","")),"40288","M",4300),
+    Row(Seq(Row("Robert ","Sebastian","Williams")),"42114","M",1400)
   )
 
   val structureData2 = Seq(
-        Row(Seq(Row("Maria ","Anne","Jones")),"39192","F",5500),
-        Row(Seq(Row("Jen","Mary","Brown")),"","F",-1)
+        Row(Seq(Row("Maria ",Seq(Row("Anne"),Row("Frank")),"Jones")),"39192","F",5500),
+        Row(Seq(Row("Jen",Seq(Row("Mary"),Row("Allen")),"Brown")),"","F",-1)
   )
 
   val structureSchema = new StructType()
-    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("lastname",StringType),false))
+    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename", StringType).add("lastname",StringType),false))
     .add("id",StringType)
     .add("gender",StringType)
     .add("salary",IntegerType)
 
   val structureSchema2 = new StructType()
-    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename",StringType).add("lastname",StringType),false))
+    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename",new ArrayType(new StructType().add("name1",StringType),false)).add("lastname",StringType),false))
     .add("id",StringType)
     .add("gender",StringType)
     .add("salary",IntegerType)
@@ -249,15 +294,19 @@ class MyCustomException(s: String) extends Exception(s) {}
   val df_datatypes  = df.select(df_datatypes_cols:_*).schema.fields.map(f => (f.name,f.dataType)).toList
   val df2_datatypes = df2.select(df2_datatypes_cols:_*).schema.fields.map(f => (f.name,f.dataType)).toList
 
+  val unified_schema = unify_spark_df(df_datatypes zip df2_datatypes)
+
+  println(unified_schema.toString)
 
 
-merge_spark_df(unify_spark_df(df_datatypes zip df2_datatypes)) match 
-{
-    case (output_string,output_string_) => 
-    {
-          val df3 = df.withColumn("name",expr(output_string)).union(df2.withColumn("name",expr(output_string_)))
 
-  df3.printSchema()
-  df3.show()
-    }
-}
+// merge_spark_df(unify_spark_df(df_datatypes zip df2_datatypes)) match 
+// {
+//     case (output_string,output_string_) => 
+//     {
+//       val df3 = df.withColumn("name",expr(output_string)).union(df2.withColumn("name",expr(output_string_)))
+
+//       df3.printSchema()
+//       df3.show()
+//     }
+// }
