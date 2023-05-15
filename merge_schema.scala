@@ -9,6 +9,14 @@ def insert(list: List[StructField], i: Int, value: StructField): List[StructFiel
     case _ => value :: list
 }
 
+def is_simple_type(data_type:DataType): Boolean = 
+{
+  (data_type) match 
+  {
+    case (ArrayType(_,_)) | (MapType(_,_,_)) | (StructType(_))=> false
+    case _ => true
+  }
+}
 
 def unify_struct_fields(struct_field_a:Seq[StructField], struct_field_b:Seq[StructField]):Seq[StructField] = 
      {
@@ -76,27 +84,50 @@ def unify_spark_types (type_pair:(DataType,DataType)):DataType =
        }
      }
 
-def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struct_field_b:Seq[StructField]):(String, String)= 
+def merge_struct_fields(parent_struct_name:String,anon_var:Char, struct_field_a:Seq[StructField], struct_field_b:Seq[StructField]):(String, String)= 
     {
         var output_string = ""
         var output_string_ = ""
+
+        // If our structs have the same size we can zip and iterate through them together.
         if (struct_field_a.size == struct_field_b.size)
         {
             for (x <- (struct_field_a zip struct_field_b))
             {
                 x match
                 {
-                    case (StructField(name_a, _, _, _), _) => 
+                    case (StructField(name_a, data_type_a, contains_null_a, meta_a), StructField(name_b, data_type_b, contains_null_b, meta_b)) => 
                     {
-                        output_string = output_string + "'" + name_a + "' ," + column_name + "." + name_a
-                        output_string_ = output_string_ + "'" + name_a + "' ," +column_name + "." + name_a
-                    }
+                        if (is_simple_type(data_type_a) && is_simple_type(data_type_b))
+                        {
+                          if (data_type_a == data_type_b)
+                          {
+                            output_string = output_string   + "'" + name_a + "' ," + anon_var + "." + parent_struct_name + name_a + " ,"
+                            output_string_ = output_string_ + "'" + name_a + "' ," + anon_var + "." + parent_struct_name + name_a + " ,"
+                          }else
+                          {
+                            throw new MyCustomException("Exception caught in merge_struct_fields, " + (data_type_a).toString + " cannot match " + data_type_b.toString +".")
+                          }
+
+                        }else 
+                        {
+                          merge_complex_spark_types(parent_struct_name + name_a +".", anon_var, (data_type_a,data_type_b)) match 
+                          {
+                            case (out,out_) => 
+                            {
+                                output_string = output_string   + "'" + name_a + "' ," + out + " ,"
+                                output_string_ = output_string_ + "'" + name_a + "' ," + out_ + " ,"
+                            }
+                          }
+                        }
+
+                    } 
                 } 
             }
-            return (output_string, output_string_)
+            return (output_string.substring(0,output_string.size-1), output_string_.substring(0,output_string_.size-1))
         }else{
-            var struct_field_a_list = struct_field_a.toList
-            var struct_field_b_list = struct_field_b.toList
+            var struct_field_a_list = struct_field_a.sortWith(_.name < _.name).toList
+            var struct_field_b_list = struct_field_b.sortWith(_.name < _.name).toList
             
             var range = 0 
             if (struct_field_a_list.size >= struct_field_b_list.size)
@@ -119,7 +150,7 @@ def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struc
                             case StructField(name_b, _, _, _) => 
                             {
                                 output_string = output_string + "'" + name_b + "' ," +"null"
-                                output_string_ = output_string_ + "'" + name_b + "' ," + column_name +"."+name_b
+                                output_string_ = output_string_ + "'" +  name_b + "' ," + anon_var +"."+ parent_struct_name + name_b
                                 if (x == range-1)
                                 {
                                     return (output_string,output_string_)
@@ -138,7 +169,7 @@ def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struc
                             case StructField(name_a, _, _, _) => 
                             {
                                 output_string = output_string + "'" + name_a + "' ," +"null"
-                                output_string_ = output_string_ + "'" + name_a + "' ," + column_name +"."+name_a
+                                output_string_ = output_string_ + "'" + name_a + "' ," + anon_var +"."+ parent_struct_name + name_a
                                 if (x == range-1)
                                 {
                                     return (output_string,output_string_)
@@ -151,10 +182,12 @@ def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struc
                {
                     case (StructField(name_a, data_type_a, is_null_a, meta_a), StructField(name_b,data_type_b,is_null_b,meta_b)) => 
                     {
+                        println(name_a)
+                        println(name_b)
                         if (name_a == name_b)
                         {
-                            output_string = output_string + "'" + name_a + "' ," +column_name + "." + name_a
-                            output_string_ = output_string_ + "'" + name_a + "' ," +column_name + "." + name_a
+                            output_string = output_string + "'" + name_a + "' ," + anon_var + "." + parent_struct_name + name_a
+                            output_string_ = output_string_ + "'" + name_a + "' ," + anon_var + "." + parent_struct_name + name_a
                         }
                         else
                         {
@@ -162,13 +195,13 @@ def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struc
                             {
                                 struct_field_b_list = insert(struct_field_b_list,x,StructField(name_a,data_type_a,is_null_a, meta_a))
                                 output_string = output_string + "'" + name_a + "' ," + "null"
-                                output_string_ = output_string_ + "'" + name_a + "' ," + column_name +"."+name_a
+                                output_string_ = output_string_ + "'" + name_a + "' ," + anon_var +"." + parent_struct_name + name_a
                             }
                             else
                             {
                                 struct_field_b_list = insert(struct_field_a_list,x,StructField(name_b,data_type_b,is_null_b, meta_b))
                                 output_string = output_string + "'" + name_b + "' ," +  "null"
-                                output_string_ = output_string_ + "'" + name_b + "' ," + column_name +"."+name_b
+                                output_string_ = output_string_ + "'" + name_b + "' ," + anon_var +"."+ parent_struct_name + name_b
                             }
                         }
 
@@ -185,20 +218,21 @@ def merge_struct_fields(column_name:Char, struct_field_a:Seq[StructField], struc
         }
     }
 
-def merge_complex_spark_types (column_name:String, anon_var:Int = 97,type_pair:(DataType,DataType)):(String,String) = 
+def merge_complex_spark_types (parent_struct_name:String, anon_var:Char = 'a', type_pair:(DataType,DataType)):(String,String) = 
      {
        type_pair match 
        {
-         case (ArrayType(subtype_a,_), ArrayType(subtype_b, _)) => merge_complex_spark_types(column_name, anon_var,(subtype_a,subtype_b))
+         case (ArrayType(subtype_a,_), ArrayType(subtype_b, _)) => merge_complex_spark_types(parent_struct_name,anon_var,(subtype_a,subtype_b))
+
          case (StructType(struct_fields_a),StructType(struct_fields_b)) => 
          {
-            merge_struct_fields(anon_var.toChar,struct_fields_a, struct_fields_b) match
+            merge_struct_fields(parent_struct_name,anon_var.toChar,struct_fields_a, struct_fields_b) match
              {
                 case (output_string, output_string_) => 
                 {
                     (
-                        "transform(" + column_name + ","+anon_var.toChar+" -> named_struct("+output_string+"))",
-                        "transform(" + column_name + ","+anon_var.toChar+" -> named_struct("+ output_string_ +"))"
+                        "named_struct("+output_string +")",
+                        "named_struct("+ output_string_ +")"
                     )
                 }
              }   
@@ -215,7 +249,13 @@ def merge_spark_df(column_diff:List[(String, DataType, DataType)]):(String,Strin
             {
                 case (column_name, type_a, type_b) => 
                 {
-                    return merge_complex_spark_types(column_name, 97,(type_a, type_b))
+                  merge_complex_spark_types("",'a',(type_a, type_b)) match 
+                  {
+                    case (output_string,output_string_) => 
+                    {
+                      return ("transform(" + column_name + ","+(97).toChar+" ->" + output_string + ")" ,"transform(" + column_name + ","+(97).toChar+" ->" + output_string_ + ")")
+                    }
+                  }
                 }
             }
         }
@@ -252,24 +292,24 @@ def unify_spark_df(zipped_type_list:List[((String, DataType),(String, DataType))
      }
 
 val structureData = Seq(
-    Row(Seq(Row("James ",Seq(Row("Vella")),"Smith")),"36636","M",3100),
-    Row(Seq(Row("Michael ",Seq(Row("J")),"Rose")),"40288","M",4300),
-    Row(Seq(Row("Robert ",Seq(Row("Sebastian")),"Williams")),"42114","M",1400)
+    Row(Seq(Row("James ",Row("Vella"),"Smith")),"36636","M",3100),
+    Row(Seq(Row("Michael ",Row("J"),"Rose")),"40288","M",4300),
+    Row(Seq(Row("Robert ",Row("Sebastian"),"Williams")),"42114","M",1400)
   )
 
 val structureData2 = Seq(
-        Row(Seq(Row("Maria ",Seq(Row("Anne",""),Row("Frank","")),"Jones")),"39192","F",5500),
-        Row(Seq(Row("Jen",Seq(Row("Mary",""),Row("Allen","Burn")),"Brown")),"","F",-1)
+        Row(Seq(Row("Maria ",Row("Anne",""),"Jones")),"39192","F",5500),
+        Row(Seq(Row("Jen",Row("Allen","Burn"),"Brown")),"","F",-1)
   )
 
 val structureSchema = new StructType()
-    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename", new ArrayType(new StructType().add("middlename0",StringType),false)).add("lastname",StringType),false))
+    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename", new StructType().add("middlename0",StringType),false).add("lastname",StringType),false))
     .add("id",StringType)
     .add("gender",StringType)
     .add("salary",IntegerType)
 
 val structureSchema2 = new StructType()
-    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename",new ArrayType(new StructType().add("middlename0",StringType).add("middlename1",StringType),false)).add("lastname",StringType),false))
+    .add("name",new ArrayType(new StructType().add("firstname",StringType).add("middlename",new StructType().add("middlename0",StringType).add("middlename1",StringType),false).add("lastname",StringType),false))
     .add("id",StringType)
     .add("gender",StringType)
     .add("salary",IntegerType)
@@ -300,6 +340,12 @@ merge_spark_df(unify_spark_df(df_datatypes zip df2_datatypes)) match
 {
     case (output_string,output_string_) => 
     {
+      println(output_string)
+      println("")
+      println(output_string_)
+
+      println("")
+      println("")
       val df3 = df.withColumn("name",expr(output_string)).union(df2.withColumn("name",expr(output_string_)))
 
       df3.printSchema()
